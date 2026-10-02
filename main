@@ -38,7 +38,12 @@ def consultar_moeda(moeda):
         print(resposta.json())
         return resposta.json()
     elif resposta.status_code == 404:
-        print("moeda nao encontrada")
+        print("Aconteceu um erro na sua requisição")
+        erro = resposta.json()
+        status = erro ["status"]
+        codigo = erro ["code"]
+        mensagem = erro["message"]
+        print(f"Status: {status} \nCódigo: {codigo} \nMensagem: {mensagem}")
         resposta.json()
 
     else:
@@ -49,3 +54,14 @@ def consultar_moeda(moeda):
 moeda_desejada = input("Qual moeda deseja consultar? (Ex: USD-BRL, EUR-BRL, BTC-BRL): ")
 
 dados_api = consultar_moeda(moeda_desejada)
+
+#-----------------------------------tratamento do json--------------
+if dados_api:
+    chave = list(dados_api)[0]
+    valor = dados_api[chave]["bid"]
+    print("\nRequisição bem sucedida!")
+    print(f"O valor da moeda {moeda_desejada} é:")
+    print(f"R${float(valor):.2f}")
+
+else:
+    print(f"Erro ao consultar a moeda {moeda_desejada}\n verifique se o formato esta correto ")
