@@ -1,0 +1,51 @@
+import requests
+
+
+
+menu_moedas = """
+
+
+=== Opções de Moedas para Consulta ===
+
+Tradicionais:
+
+USD-BRL (Dólar Americano)
+EUR-BRL (Euro)
+GBP-BRL (Libra Esterlina)
+ARS-BRL (Peso Argentino)
+
+Criptomoedas:
+
+BTC-BRL (Bitcoin)
+ETH-BRL (Ethereum)
+
+=====================================
+
+"""
+
+
+
+def consultar_moeda(moeda):
+    # .strip() remove espaços e .upper() converte tudo para maiúsculas
+    moeda_formatada = moeda.strip().upper()
+    url = f"https://economia.awesomeapi.com.br/json/last/{moeda_formatada}"
+    
+    resposta = requests.get(url)
+    # ... resto da função ...
+
+    if resposta.status_code == 200:
+        print("Deu certo!")
+        print(resposta.json())
+        return resposta.json()
+    elif resposta.status_code == 404:
+        print("moeda nao encontrada")
+        resposta.json()
+
+    else:
+        print("Erro na requisição:", resposta.status_code)
+        return None
+        
+
+moeda_desejada = input("Qual moeda deseja consultar? (Ex: USD-BRL, EUR-BRL, BTC-BRL): ")
+
+dados_api = consultar_moeda(moeda_desejada)
