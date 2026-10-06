@@ -3,18 +3,18 @@ Rodar no terminal: python -m streamlit run app.py
 """
 import html
 
+import altair as alt
 import pandas as pd
 import requests
 import streamlit as st
 
-MOEDAS = {
-    "USD-BRL · Dólar Americano": "USD-BRL",
-    "EUR-BRL · Euro": "EUR-BRL",
-    "GBP-BRL · Libra Esterlina": "GBP-BRL",
-    "ARS-BRL · Peso Argentino": "ARS-BRL",
-    "BTC-BRL · Bitcoin": "BTC-BRL",
-    "ETH-BRL · Ethereum": "ETH-BRL",
-    "Outra (digitar o código)": None,
+RESERVA = {
+    "USD-BRL": "Dólar Americano/Real Brasileiro",
+    "EUR-BRL": "Euro/Real Brasileiro",
+    "GBP-BRL": "Libra Esterlina/Real Brasileiro",
+    "ARS-BRL": "Peso Argentino/Real Brasileiro",
+    "BTC-BRL": "Bitcoin/Real Brasileiro",
+    "ETH-BRL": "Ethereum/Real Brasileiro",
 }
 PAINEL = ["USD-BRL", "EUR-BRL", "GBP-BRL", "BTC-BRL"]
 BASE_URL = "https://economia.awesomeapi.com.br/json"
@@ -56,10 +56,10 @@ header[data-testid="stHeader"],footer,#MainMenu{display:none;}
 label p{font-size:13px !important;font-weight:600 !important;color:#475569 !important;}
 div[data-baseweb="select"]>div,div[data-baseweb="input"],div[data-baseweb="base-input"]{
  border-radius:10px !important;background:#fff !important;border-color:var(--line) !important;}
-.stTabs [data-baseweb="tab-list"]{gap:6px;background:#E8ECF4;padding:5px;border-radius:12px;margin-bottom:12px;}
-.stTabs [data-baseweb="tab"]{border-radius:9px;height:40px;padding:0 20px;font-weight:600;color:var(--muted);}
-.stTabs [aria-selected="true"]{background:#fff;color:var(--ink);box-shadow:0 1px 3px rgba(15,23,42,.12);}
-.stTabs [data-baseweb="tab-highlight"],.stTabs [data-baseweb="tab-border"]{display:none;}
+[data-baseweb="tab-list"]{gap:6px;background:#E8ECF4;padding:5px;border-radius:12px;margin-bottom:12px;}
+[data-baseweb="tab"]{border-radius:9px;height:40px;padding:0 20px;font-weight:600;color:var(--muted);}
+[aria-selected="true"]{background:#fff;color:var(--ink);box-shadow:0 1px 3px rgba(15,23,42,.12);}
+[data-baseweb="tab-highlight"],[data-baseweb="tab-border"]{display:none;}
 
 /* Cartões */
 .card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:24px;box-shadow:0 1px 2px rgba(15,23,42,.04);}
@@ -81,13 +81,32 @@ details[data-testid="stExpander"]{border-radius:12px;border-color:var(--line);ba
 def fmt(v, casas=None):
     """Formato brasileiro: 1.234,56"""
     if casas is None:
-        casas = 2 if abs(v) >= 100 else 4
+        a = abs(v)
+        casas = 2 if a >= 100 else 4 if a >= 1 else 6 if a >= 0.01 else 8
     return f"{v:,.{casas}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def valor_moeda(v, cod):
+    """R$ 1,00 para BRL; '1,0000 EUR' para as demais."""
+    txt = fmt(v)
+    return f"R$ {txt}" if cod == "BRL" else f"{txt} {cod}"
 
 
 def badge(pct):
     cls, seta = ("up", "▲") if pct >= 0 else ("down", "▼")
     return f"<span class='badge {cls}'>{seta} {fmt(abs(pct), 2)}%</span>"
+
+
+@st.cache_data(ttl=86400)
+def listar_moedas():
+    """Todos os pares disponíveis na API: {'USD-BRL': 'Dólar Americano/Real Brasileiro', ...}"""
+    try:
+        resposta = requests.get(f"{BASE_URL}/available", timeout=10)
+        if resposta.status_code == 200 and resposta.json():
+            return resposta.json()
+    except requests.RequestException:
+        pass
+    return None
 
 
 @st.cache_data(ttl=60)
@@ -126,6 +145,61 @@ def stat(rotulo, valor):
     return f"<div class='stat'><small>{rotulo}</small><b>{valor}</b></div>"
 
 
+DIAS = ["seg.", "ter.", "qua.", "qui.", "sex.", "sáb.", "dom."]
+MESES = ["jan.", "fev.", "mar.", "abr.", "mai.", "jun.", "jul.", "ago.", "set.", "out.", "nov.", "dez."]
+
+
+def grafico(df, subiu, contra):
+    """Linha com degradê, grade horizontal, eixo Y ajustado e marcador no hover."""
+    cor, topo = ("#16A34A", "rgba(22,163,74,0.30)") if subiu else ("#EF4444", "rgba(239,68,68,0.30)")
+    d = df.reset_index()
+    d["Data"] = pd.to_datetime(d["Data"])
+    d["Valor"] = d["Valor (R$)"]
+    d["Dia"] = d["Data"].apply(lambda x: f"{DIAS[x.weekday()]}, {x.day:02d} de {MESES[x.month - 1]}")
+    d["Texto"] = d["Valor"].apply(lambda x: valor_moeda(x, contra))
+
+    lo, hi = float(d["Valor"].min()), float(d["Valor"].max())
+    pad = (hi - lo) * 0.2 or hi * 0.01
+    casas = 2 if (hi - lo) >= 0.1 or hi >= 100 else (4 if hi >= 1 else 6 if hi >= 0.01 else 8)
+    # separadores no padrão brasileiro nos rótulos do eixo
+    rotulo = (
+        "replace(replace(replace(format(datum.value, ',." + str(casas) + "f'), /,/g, '#'), /\\./g, ','), /#/g, '.')"
+    )
+
+    base = alt.Chart(d).encode(
+        x=alt.X("Data:T", axis=alt.Axis(title=None, format="%d/%m", grid=False, domain=False, ticks=False, labelAngle=0, tickCount=6)),
+        y=alt.Y(
+            "Valor:Q",
+            scale=alt.Scale(domain=[lo - pad, hi + pad], nice=False),
+            axis=alt.Axis(title=None, grid=True, gridColor="#E2E8F0", domain=False, ticks=False, labelExpr=rotulo),
+        ),
+    )
+    gradiente = alt.Gradient(
+        gradient="linear",
+        stops=[alt.GradientStop(color="rgba(255,255,255,0)", offset=0), alt.GradientStop(color=topo, offset=1)],
+        x1=1, x2=1, y1=1, y2=0,
+    )
+    area = base.mark_area(clip=True, interpolate="linear", color=gradiente, line={"color": cor, "strokeWidth": 2.2})
+
+    nearest = alt.selection_point(nearest=True, on="mouseover", fields=["Data"], empty=False, clear="mouseout")
+    selectors = alt.Chart(d).mark_point().encode(x="Data:T", opacity=alt.value(0)).add_params(nearest)
+    pontos = base.mark_point(filled=True, size=90, color=cor).encode(
+        opacity=alt.condition(nearest, alt.value(1), alt.value(0))
+    )
+    regua = (
+        alt.Chart(d)
+        .mark_rule(color="#94A3B8", strokeDash=[3, 3])
+        .encode(x="Data:T", tooltip=[alt.Tooltip("Texto:N", title="Valor"), alt.Tooltip("Dia:N", title="Data")])
+        .transform_filter(nearest)
+    )
+    return (
+        alt.layer(area, selectors, pontos, regua)
+        .properties(width="container", height=320)
+        .configure_view(stroke=None)
+        .configure_axis(labelFont="Inter", labelColor="#64748B", labelFontSize=12)
+    )
+
+
 # ---------- Hero com painel de moedas ----------
 painel, _ = consultar_moeda(",".join(PAINEL))
 cards, hora = "", "--:--"
@@ -145,16 +219,18 @@ st.markdown(
 )
 
 # ---------- Seleção da moeda ----------
-col_a, col_b = st.columns([3, 2])
-escolha = col_a.selectbox("Moeda", list(MOEDAS.keys()))
-moeda = MOEDAS[escolha]
-if moeda is None:
-    moeda = col_b.text_input("Código da moeda", placeholder="Ex: CAD-BRL")
-moeda = moeda.strip().upper()
-
-if not moeda:
-    st.info("Digite o código da moeda para continuar.")
-    st.stop()
+pares = listar_moedas()
+if not pares:
+    pares = RESERVA
+    st.warning("Não foi possível carregar a lista completa de moedas. Exibindo as principais.")
+codigos = sorted(pares, key=lambda k: (not k.endswith("-BRL"), k))  # pares com real primeiro
+moeda = st.selectbox(
+    f"Moeda ({len(codigos)} pares disponíveis · digite para buscar)",
+    codigos,
+    index=codigos.index("USD-BRL") if "USD-BRL" in codigos else 0,
+    format_func=lambda k: f"{k} · {pares[k]}",
+)
+codigo, contra = moeda.split("-")
 
 dados_api, erro = consultar_moeda(moeda)
 aba_cotacao, aba_conversor, aba_historico = st.tabs(["Cotação", "Conversor", "Histórico"])
@@ -170,7 +246,7 @@ with aba_cotacao:
         st.markdown(
             f"<div class='card'><div class='pair'>{d['code']}/{d['codein']}</div>"
             f"<div class='sub'>{html.escape(d['name'])}</div>"
-            f"<div class='price'>R$ {fmt(float(d['bid']))}{badge(float(d['pctChange']))}</div>"
+            f"<div class='price'>{valor_moeda(float(d['bid']), d['codein'])}{badge(float(d['pctChange']))}</div>"
             f"<div class='sub'>Atualizado em {d['create_date']}</div>"
             f"<div class='stats'>{stat('Máxima', fmt(float(d['high'])))}{stat('Mínima', fmt(float(d['low'])))}"
             f"{stat('Compra', fmt(float(d['bid'])))}{stat('Venda', fmt(float(d['ask'])))}</div></div>",
@@ -185,23 +261,30 @@ with aba_conversor:
         st.error(erro or "Não foi possível obter a cotação.")
     else:
         cotacao = float(dados_api[list(dados_api)[0]]["bid"])
-        codigo = moeda.split("-")[0]
+        opcoes = [f"{codigo} → {contra}", f"{contra} → {codigo}"]
         c1, c2 = st.columns([2, 3])
         valor = c1.number_input("Valor", min_value=0.0, value=100.0, step=10.0, format="%.2f")
-        sentido = c2.radio("Sentido", [f"{codigo} → BRL", f"BRL → {codigo}"], horizontal=True)
-        if sentido.startswith(codigo):
-            rotulo, resultado = f"{fmt(valor, 2)} {codigo} valem", f"R$ {fmt(valor * cotacao, 2)}"
+        sentido = c2.radio("Sentido", opcoes, horizontal=True)
+        if sentido == opcoes[0]:
+            rotulo, resultado = f"{fmt(valor, 2)} {codigo} valem", valor_moeda(valor * cotacao, contra)
         else:
-            rotulo, resultado = f"R$ {fmt(valor, 2)} compram", f"{fmt(valor / cotacao, 6)} {codigo}"
+            rotulo = f"{fmt(valor, 2)} {contra} compram"
+            resultado = f"{fmt(valor / cotacao)} {codigo}" if cotacao else "—"
         st.markdown(
             f"<div class='card'><div class='sub'>{rotulo}</div><div class='price'>{resultado}</div>"
-            f"<div class='sub'>Cotação usada: 1 {codigo} = R$ {fmt(cotacao)} · atualizada a cada minuto</div></div>",
+            f"<div class='sub'>Cotação usada: 1 {codigo} = {valor_moeda(cotacao, contra)} · atualizada a cada minuto</div></div>",
             unsafe_allow_html=True,
         )
 
 # ---------- Histórico ----------
 with aba_historico:
-    dias = st.select_slider("Período (dias)", options=[7, 15, 30, 60, 90], value=15)
+    periodos = [7, 15, 30, 60, 90]
+    if hasattr(st, "segmented_control"):
+        dias = st.segmented_control(
+            "Período", periodos, default=30, format_func=lambda n: f"{n}D", label_visibility="collapsed"
+        ) or 30
+    else:
+        dias = st.select_slider("Período (dias)", options=periodos, value=30)
     df, erro_h = consultar_historico(moeda, dias)
     if df is None:
         st.error(erro_h)
@@ -209,12 +292,12 @@ with aba_historico:
         v = df["Valor (R$)"]
         var = (v.iloc[-1] / v.iloc[0] - 1) * 100
         st.markdown(
-            f"<div class='stats' style='margin:6px 0 14px'>{stat('Máxima', 'R$ ' + fmt(v.max()))}"
-            f"{stat('Mínima', 'R$ ' + fmt(v.min()))}{stat('Média', 'R$ ' + fmt(v.mean()))}"
+            f"<div class='stats' style='margin:6px 0 14px'>{stat('Máxima', valor_moeda(v.max(), contra))}"
+            f"{stat('Mínima', valor_moeda(v.min(), contra))}{stat('Média', valor_moeda(v.mean(), contra))}"
             f"<div class='stat'><small>Variação no período</small>{badge(var)}</div></div>",
             unsafe_allow_html=True,
         )
-        st.area_chart(df, color="#0F9D8F", height=320)
+        st.altair_chart(grafico(df, var >= 0, contra))
 
 st.markdown(
     "<div class='foot'>Fonte: AwesomeAPI · Cotações com atraso de até 1 minuto.<br>"
